@@ -13,10 +13,12 @@ from .db import upsert_lap, latest_laps, lap_counts_by_track
 from .strategy import generate_placeholder_cards
 from .f1_udp import F1UDPListener, F1LiveState
 from .logging_util import AppLogger
-from .strategy_model import LapRow, estimate_degradation_for_track_tyre, pit_window_one_stop
+from .strategy_model import LapRow, estimate_degradation_for_track_tyre, pit_window_one_stop, pit_windows_two_stop
+
 from .db import distinct_tracks, laps_for_track
 
 import re
+import time
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -87,9 +89,17 @@ class MainWindow(QtWidgets.QMainWindow):
         if isinstance(max_from_fresh, (int, float)) and max_from_fresh > 0:
             pw = pit_window_one_stop(race_laps, max_from_fresh, min_stint_laps=5)
 
+        pw2 = None
+        if isinstance(max_from_fresh, (int, float)) and max_from_fresh > 0:
+            pw2 = pit_windows_two_stop(race_laps, max_from_fresh, min_stint_laps=5)
+
         pit_txt = "pit window (1-stop): —"
         if pw is not None:
             pit_txt = f"pit window (1-stop): lap {pw[0]} – {pw[1]}"
+
+        pit2_txt = "pit windows (2-stop): —"
+        if pw2 is not None:
+            pit2_txt = f"pit windows (2-stop): stop1 lap {pw2[0]} – {pw2[1]}, stop2 lap {pw2[2]} – {pw2[3]}"
 
         max_txt = ""
         if isinstance(max_from_fresh, (int, float)):
@@ -101,6 +111,7 @@ class MainWindow(QtWidgets.QMainWindow):
             f"pace loss ≈ {est.pace_loss_per_pct_s:.3f}s per 1% wear\n"
             f"{max_txt}"
             f"{pit_txt}\n"
+            f"{pit2_txt}\n"
             f"{est.notes}"
         )
 
@@ -295,18 +306,38 @@ class MainWindow(QtWidgets.QMainWindow):
     def _on_new_csv(self, src: Path, cached: Path):
         # ---- DEDUPE: gleiche Datei (create/modify) nur 1x verarbeiten ----
         try:
-            mtime_ns = src.stat().st_mtime_ns
+            stat = src.stat()
+            sig = (stat.st_size, stat.st_mtime_ns)
         except Exception:
-            mtime_ns = None
+            return
 
         key = str(src)
-        if mtime_ns is not None:
-            last = self._dedupe_mtime.get(key)
-            if last == mtime_ns:
-                return
-            self._dedupe_mtime[key] = mtime_ns
+        last_sig = self._dedupe_mtime.get(key)
+
+        if last_sig == sig:
+            return
+
+        self._dedupe_mtime[key] = sig
+
+        now = time.time()
+        last_t = getattr(self, "_dedupe_time_sec", {}).get(key, 0)
+
+        if now - last_t < 1.0:   # 1 Sekunde Cooldown
+            return
+
+        self._dedupe_time_sec = getattr(self, "_dedupe_time_sec", {})
+        self._dedupe_time_sec[key] = now
+
         # ------------------------------------------------------------------
 
+        # NEVER process files from our own cache folder (prevents infinite loops)
+        try:
+            cache_dir = Path(app_data_dir()) / "cache"
+            if cache_dir in src.resolve().parents:
+                return
+        except Exception:
+            pass
+        #-------------------------------------------------------------------
         
         name = src.stem.lower()
         if "_tt_" in name or name.endswith("_tt") or name.startswith("tt_"):

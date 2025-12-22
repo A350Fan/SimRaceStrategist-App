@@ -60,7 +60,7 @@ def upsert_lap(source_file: str, summary: Dict[str, Any]) -> None:
                 wear_fr,
                 wear_rl,
                 wear_rr
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(source_file) DO UPDATE SET
                 game = excluded.game,
                 track = excluded.track,
@@ -130,3 +130,25 @@ def lap_counts_by_track() -> List[Tuple[str, int]]:
         """
     )
     return cur.fetchall()
+
+
+def laps_for_track(track: str, limit: int = 2000):
+    con = connect()
+    cur = con.execute(
+        """
+        SELECT
+            created_at, session, track, tyre, weather,
+            lap_time_s, fuel_load, wear_fl, wear_fr, wear_rl, wear_rr
+        FROM laps
+        WHERE track = ?
+        ORDER BY id ASC
+        LIMIT ?
+        """,
+        (track, limit),
+    )
+    return cur.fetchall()
+
+def distinct_tracks():
+    con = connect()
+    cur = con.execute("SELECT DISTINCT COALESCE(track,'') FROM laps WHERE COALESCE(track,'') <> '' ORDER BY 1;")
+    return [r[0] for r in cur.fetchall()]

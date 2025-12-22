@@ -103,7 +103,7 @@ def build_stints(rows: List[LapRow], max_gap_min: int = 12) -> List[List[StintPo
 
             # wear should generally decrease over laps (remaining % goes down).
             # If it increases notably -> likely new tyres/pit/reset.
-            if last_wear is not None and (w - last_wear) > 2.0:
+            if last_wear is not None and (last_wear - w) > 2.0:
                 new_stint = True
 
         if new_stint:
@@ -139,9 +139,9 @@ def estimate_degradation_for_track_tyre(
     pace_vs_wear = []  # (wear_avg, lap_time_s)
 
     for stint in stints:
-        # wear per lap: deltas between consecutive laps (remaining % goes down)
+        # wear per lap: deltas between consecutive laps (wear % goes down)
         for a, b in zip(stint, stint[1:]):
-            dw = (a.wear_avg - b.wear_avg)  # positive if remaining decreased
+            dw = (b.wear_avg - a.wear_avg)  # positive if wear decreased
             if 0.0 < dw < 10.0:  # sanity
                 wear_deltas.append(dw)
 
@@ -161,7 +161,7 @@ def estimate_degradation_for_track_tyre(
 
     # pace loss per 1% wear lost:
     # We model lap_time = a + b*(100 - wear_avg) so b is seconds per 1% wear lost
-    x = np.array([100.0 - w for (w, t) in pace_vs_wear], dtype=float)
+    x = np.array([w for (w, t) in pace_vs_wear], dtype=float) #wear%
     y = np.array([t for (w, t) in pace_vs_wear], dtype=float)
 
     # robust-ish: simple linear fit
@@ -173,14 +173,14 @@ def estimate_degradation_for_track_tyre(
     current_wear = float(np.median(last_wears)) if last_wears else None
     laps_to_thr = None
     if current_wear is not None and wear_per_lap > 0.0:
-        if current_wear > wear_threshold:
-            laps_to_thr = (current_wear - wear_threshold) / wear_per_lap
+        if current_wear < wear_threshold:
+            laps_to_thr = (wear_threshold - current_wear) / wear_per_lap
         else:
             laps_to_thr = 0.0
 
     max_from_fresh = None
     if wear_per_lap > 0.0:
-        max_from_fresh = (100.0 - wear_threshold) / wear_per_lap
+        max_from_fresh = (wear_threshold) / wear_per_lap
         max_from_fresh = max(0.0, max_from_fresh)
 
 
@@ -189,7 +189,7 @@ def estimate_degradation_for_track_tyre(
         wear_per_lap_pct=wear_per_lap,
         pace_loss_per_pct_s=pace_loss_per_pct,
         predicted_laps_to_threshold=laps_to_thr,
-        notes=f"Built from {len(stints)} stint(s)."
+        notes=f"Built from {len(stints)} stint(s).",
         max_stint_from_fresh_laps=max_from_fresh
     )
 
@@ -210,3 +210,53 @@ def pit_window_one_stop(race_laps: int, max_stint_laps: float, min_stint_laps: i
     if earliest > latest:
         return None
     return earliest, latest
+
+def pit_windows_two_stop(race_laps: int, max_stint_laps: float, min_stint_laps: int = 5):
+    """
+    Returns 2-stop windows as:
+      (stop1_earliest, stop1_latest, stop2_earliest, stop2_latest)
+    where stop1 is the lap you pit first, stop2 is the lap you pit second.
+
+    Conditions:
+      - 3 stints: a=stop1, b=stop2-stop1, c=race_laps-stop2
+      - each stint in [min_stint_laps, floor(max_stint_laps)]
+    """
+    if race_laps <= 0 or max_stint_laps <= 0:
+        return None
+
+    max_int = int(max_stint_laps)  # conservative
+    if max_int < min_stint_laps:
+        return None
+
+    feasible = []
+
+    # stop1 must leave room for 2 more stints (min each)
+    stop1_min = min_stint_laps
+    stop1_max = min(max_int, race_laps - 2 * min_stint_laps)
+
+    for s1 in range(stop1_min, stop1_max + 1):
+        # stop2 must be at least min after stop1 and leave min for last stint
+        s2_min = s1 + min_stint_laps
+        s2_max = min(s1 + max_int, race_laps - min_stint_laps)
+
+        for s2 in range(s2_min, s2_max + 1):
+            a = s1
+            b = s2 - s1
+            c = race_laps - s2
+
+            if b < min_stint_laps or b > max_int:
+                continue
+            if c < min_stint_laps or c > max_int:
+                continue
+
+            feasible.append((s1, s2))
+
+    if not feasible:
+        return None
+
+    s1_earliest = min(x[0] for x in feasible)
+    s1_latest   = max(x[0] for x in feasible)
+    s2_earliest = min(x[1] for x in feasible)
+    s2_latest   = max(x[1] for x in feasible)
+
+    return (s1_earliest, s1_latest, s2_earliest, s2_latest)

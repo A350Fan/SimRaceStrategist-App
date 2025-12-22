@@ -181,8 +181,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # DB views
         self.tbl = QtWidgets.QTableWidget()
-        self.tbl.setColumnCount(12)
-        self.tbl.setHorizontalHeaderLabels(["created_at","game","track","session","tyre","weather","lap_time_s","fuel","wear_FL","wear_FR","wear_RL","wear_RR"])
+        self.tbl.verticalHeader().setVisible(False)
+        self.tbl.setColumnCount(14)
+        self.tbl.setHorizontalHeaderLabels(["lap","created_at","game","track","session","tyre","weather","lap_time_s","fuel","wear_FL","wear_FR","wear_RL","wear_RR","lap_tag"])
         self.tbl.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.Stretch)
         layout.addWidget(self.tbl, 3, 0, 1, 2)
 
@@ -383,13 +384,140 @@ class MainWindow(QtWidgets.QMainWindow):
         self._refresh_db_views()
         self.status.showMessage("DB updated from new CSV.", 2500)
 
+
     def _refresh_db_views(self):
-        rows = latest_laps(50)
+        rows = latest_laps(800)
+
+        def wear_avg(row):
+            vals = [row[8], row[9], row[10], row[11]]
+            vals = [v for v in vals if v is not None]
+            return (sum(vals) / len(vals)) if vals else None
+
+        # Gruppieren nach (game, track, session)  -> damit Boxenstopp über Tyre-Wechsel erkannt wird
+        by_group = {}
+        for i, row in enumerate(rows):
+            key = (row[1], row[2], row[3])
+            by_group.setdefault(key, []).append(i)
+
+        lapno = {}  # row_index -> lap number
+       
+        tags = ["OK"] * len(rows)
+
+        WEAR_DROP_THR = 2.0
+        OUTLIER_SEC = 2.0
+
+        for idxs in by_group.values():
+            idxs = sorted(idxs, key=lambda j: rows[j][0])
+
+            w = [wear_avg(rows[j]) for j in idxs]
+            t = [rows[j][6] for j in idxs]
+
+            # Lap-Nummern vergeben (chronologisch: alt -> neu)
+            for n, j in enumerate(idxs, start=1):
+                lapno[j] = n
+
+
+            # IN / OUT über Wear-Drop
+            for k in range(1, len(idxs)):
+                if w[k-1] is None or w[k] is None:
+                    continue
+                if (w[k-1] - w[k]) > WEAR_DROP_THR:
+                    tags[idxs[k-1]] = "IN"
+                    tags[idxs[k]] = "OUT"
+
+            # für SHIFT/SLOW eine stabile "alt -> neu" Reihenfolge:
+            # tie-breaker: bei gleicher created_at ist höherer rows-index = älter (weil latest_laps liefert neueste zuerst)
+            idxs_time = sorted(idxs, key=lambda j: (rows[j][0], -j))
+
+
+            # SHIFT: detect a sustained pace step INSIDE a stint (not across IN/OUT)
+            SHIFT_JUMP_SEC = 1.5       # <- realistischer als 2.0 für "Regen + alte Reifen"
+            SHIFT_AVG_DELTA_SEC = 1  # avg(after) - avg(before) mindestens so viel
+            WIN = 3                    # 3 Laps vor/nachher
+
+            # Stints aus idxs bauen (durch IN/OUT getrennt)
+            stints = []
+            cur = []
+            for j in idxs_time:
+                if tags[j] in ("IN", "OUT"):
+                    if cur:
+                        stints.append(cur)
+                        cur = []
+                    continue
+                cur.append(j)
+            if cur:
+                stints.append(cur)
+
+            # Pro Stint maximal 1 SHIFT
+            for stint in stints:
+                if len(stint) < (WIN*2 + 1):
+                    continue
+
+                shift_added = False
+                for k in range(WIN, len(stint) - WIN):
+                    if shift_added:
+                        break
+
+                    j_prev = stint[k-1]
+                    j_cur  = stint[k]
+
+                    lt_prev = rows[j_prev][6]
+                    lt_cur  = rows[j_cur][6]
+                    if lt_prev is None or lt_cur is None:
+                        continue
+
+                    # "Step" an der Grenze
+                    if (lt_cur - lt_prev) < SHIFT_JUMP_SEC:
+                        continue
+
+                    before = [rows[j][6] for j in stint[k-WIN:k] if rows[j][6] is not None]
+                    after  = [rows[j][6] for j in stint[k:k+WIN] if rows[j][6] is not None]
+                    if len(before) < WIN or len(after) < WIN:
+                        continue
+
+                    if (sum(after)/len(after)) - (sum(before)/len(before)) >= SHIFT_AVG_DELTA_SEC:
+                        tags[j_cur] = "SHIFT"
+                        shift_added = True
+
+            # SLOW-Outlier
+            SLOW_JUMP_SEC = OUTLIER_SEC  # wie vorher
+
+            for k, j in enumerate(idxs_time):
+                if tags[j] in ("IN", "OUT","SHIFT"):
+                    continue
+
+                lt = rows[j][6]
+                if lt is None:
+                    continue
+
+                # Nachbarn (lokal) holen
+                prev_lt = rows[idxs_time[k-1]][6] if k-1 >= 0 else None
+                next_lt = rows[idxs_time[k+1]][6] if k+1 < len(idxs_time) else None
+
+                # Wenn wir keine Nachbarn haben, skip (oder optional fallback)
+                if prev_lt is None or next_lt is None:
+                    continue
+
+                # SLOW nur wenn "Peak": deutlich langsamer als beide Nachbarn
+                if (lt - prev_lt) > SLOW_JUMP_SEC and (lt - next_lt) > SLOW_JUMP_SEC:
+                    tags[j] = "SLOW"
+
+
+        # Tabelle rendern
         self.tbl.setRowCount(len(rows))
         for r, row in enumerate(rows):
+            # col 0: lap number
+            lap_item = QtWidgets.QTableWidgetItem(str(lapno.get(r, "")))
+            self.tbl.setItem(r, 0, lap_item)
+
+            # cols 1..: original db columns
             for c, val in enumerate(row):
                 item = QtWidgets.QTableWidgetItem("" if val is None else str(val))
-                self.tbl.setItem(r, c, item)
+                self.tbl.setItem(r, c + 1, item)
+
+            # last col: lap_tag
+            tag_item = QtWidgets.QTableWidgetItem(tags[r])
+            self.tbl.setItem(r, len(row) + 1, tag_item)
 
     def _refresh_track_combo(self):
         try:

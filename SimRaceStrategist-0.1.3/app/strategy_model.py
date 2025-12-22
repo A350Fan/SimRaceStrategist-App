@@ -38,6 +38,7 @@ class DegradationEstimate:
     pace_loss_per_pct_s: float        # seconds per 1% wear remaining lost
     predicted_laps_to_threshold: Optional[float]  # from current wear to threshold
     notes: str
+    max_stint_from_fresh_laps: Optional[float] = None
 
 
 def _parse_dt(s: str) -> Optional[dt.datetime]:
@@ -177,10 +178,35 @@ def estimate_degradation_for_track_tyre(
         else:
             laps_to_thr = 0.0
 
+    max_from_fresh = None
+    if wear_per_lap > 0.0:
+        max_from_fresh = (100.0 - wear_threshold) / wear_per_lap
+        max_from_fresh = max(0.0, max_from_fresh)
+
+
     return DegradationEstimate(
         n_laps_used=len(pace_vs_wear),
         wear_per_lap_pct=wear_per_lap,
         pace_loss_per_pct_s=pace_loss_per_pct,
         predicted_laps_to_threshold=laps_to_thr,
         notes=f"Built from {len(stints)} stint(s)."
+        max_stint_from_fresh_laps=max_from_fresh
     )
+
+def pit_window_one_stop(race_laps: int, max_stint_laps: float, min_stint_laps: int = 5):
+    """
+    Returns (earliest_lap, latest_lap) for a 1-stop race such that:
+      - first stint <= max_stint_laps
+      - second stint <= max_stint_laps
+      - both stints >= min_stint_laps (to avoid nonsense)
+    """
+    if race_laps <= 0 or max_stint_laps <= 0:
+        return None
+
+    max_stint_int = int(max_stint_laps)  # conservative: floor
+    earliest = max(min_stint_laps, race_laps - max_stint_int)
+    latest = min(max_stint_int, race_laps - min_stint_laps)
+
+    if earliest > latest:
+        return None
+    return earliest, latest

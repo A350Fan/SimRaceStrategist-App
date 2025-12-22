@@ -13,7 +13,7 @@ from .db import upsert_lap, latest_laps, lap_counts_by_track
 from .strategy import generate_placeholder_cards
 from .f1_udp import F1UDPListener, F1LiveState
 from .logging_util import AppLogger
-from .strategy_model import LapRow, estimate_degradation_for_track_tyre
+from .strategy_model import LapRow, estimate_degradation_for_track_tyre, pit_window_one_stop
 from .db import distinct_tracks, laps_for_track
 
 import re
@@ -61,6 +61,9 @@ class MainWindow(QtWidgets.QMainWindow):
         if not track or not tyre:
             return
 
+        thr = float(self.spinWearThr.value())
+        race_laps = int(self.spinRaceLaps.value())
+
         rows_raw = laps_for_track(track, limit=5000)
 
         rows = []
@@ -71,21 +74,35 @@ class MainWindow(QtWidgets.QMainWindow):
                 wear_fl=r[7], wear_fr=r[8], wear_rl=r[9], wear_rr=r[10]
             ))
 
-        est = estimate_degradation_for_track_tyre(rows, track=track, tyre=tyre, wear_threshold=70.0)
+        est = estimate_degradation_for_track_tyre(rows, track=track, tyre=tyre, wear_threshold=thr)
 
+        # If not enough data, show note and stop
         if est.predicted_laps_to_threshold is None:
             self.lblDeg.setText(f"{tyre} @ {track}\n{est.notes}")
             return
+
+        # Pit window (1-stop)
+        max_from_fresh = getattr(est, "max_stint_from_fresh_laps", None)
+        pw = None
+        if isinstance(max_from_fresh, (int, float)) and max_from_fresh > 0:
+            pw = pit_window_one_stop(race_laps, max_from_fresh, min_stint_laps=5)
+
+        pit_txt = "pit window (1-stop): —"
+        if pw is not None:
+            pit_txt = f"pit window (1-stop): lap {pw[0]} – {pw[1]}"
+
+        max_txt = ""
+        if isinstance(max_from_fresh, (int, float)):
+            max_txt = f"max stint to {thr:.0f}% ≈ {max_from_fresh:.1f} laps\n"
 
         self.lblDeg.setText(
             f"{tyre} @ {track}\n"
             f"n={est.n_laps_used} | wear/lap ≈ {est.wear_per_lap_pct:.2f}%\n"
             f"pace loss ≈ {est.pace_loss_per_pct_s:.3f}s per 1% wear\n"
-            f"laps to 70% ≈ {est.predicted_laps_to_threshold:.1f}\n"
+            f"{max_txt}"
+            f"{pit_txt}\n"
             f"{est.notes}"
         )
-
-
 
     def _build_ui(self):
         root = QtWidgets.QWidget()
@@ -171,20 +188,35 @@ class MainWindow(QtWidgets.QMainWindow):
         self.cmbTyre = QtWidgets.QComboBox()
         self.cmbTyre.addItems(["C1","C2","C3","C4","C5","C6","INTER","WET"])
 
+        # NEW: race laps + wear threshold
+        self.spinRaceLaps = QtWidgets.QSpinBox()
+        self.spinRaceLaps.setRange(1, 200)
+        self.spinRaceLaps.setValue(50)
+
+        self.spinWearThr = QtWidgets.QSpinBox()
+        self.spinWearThr.setRange(40, 99)
+        self.spinWearThr.setValue(70)
+
         self.btnDeg = QtWidgets.QPushButton("Estimate")
         self.lblDeg = QtWidgets.QLabel("—")
 
         degLayout.addWidget(QtWidgets.QLabel("Track"), 0, 0)
         degLayout.addWidget(self.cmbTrack, 0, 1)
+
         degLayout.addWidget(QtWidgets.QLabel("Tyre"), 1, 0)
         degLayout.addWidget(self.cmbTyre, 1, 1)
-        degLayout.addWidget(self.btnDeg, 2, 0, 1, 2)
-        degLayout.addWidget(self.lblDeg, 3, 0, 1, 2)
+
+        degLayout.addWidget(QtWidgets.QLabel("Race laps"), 2, 0)
+        degLayout.addWidget(self.spinRaceLaps, 2, 1)
+
+        degLayout.addWidget(QtWidgets.QLabel("Wear threshold (%)"), 3, 0)
+        degLayout.addWidget(self.spinWearThr, 3, 1)
+
+        degLayout.addWidget(self.btnDeg, 4, 0, 1, 2)
+        degLayout.addWidget(self.lblDeg, 5, 0, 1, 2)
 
         layout.addWidget(self.grpDeg, 5, 0, 1, 2)
-
         self.btnDeg.clicked.connect(self._on_estimate_deg)
-
 
 
         self.status = QtWidgets.QStatusBar()

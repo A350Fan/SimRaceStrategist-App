@@ -13,6 +13,8 @@ from .db import upsert_lap, latest_laps, lap_counts_by_track
 from .strategy import generate_placeholder_cards
 from .f1_udp import F1UDPListener, F1LiveState
 from .logging_util import AppLogger
+from .strategy_model import LapRow, estimate_degradation_for_track_tyre
+from .db import distinct_tracks, laps_for_track
 
 import re
 
@@ -33,24 +35,56 @@ class MainWindow(QtWidgets.QMainWindow):
         self.logger.info("App started.")
         self._apply_cfg_to_ui()
         self._refresh_db_views()
+        self._refresh_track_combo()
         self._start_services_if_possible()
 
-        def _detect_session(self, src: Path) -> str:
-            n = src.stem.lower()
+    def _detect_session(self, src: Path) -> str:
+        n = src.stem.lower()
 
-            # Race
-            if re.search(r"(^|_)r($|_)", n):
-                return "R"
+        # Race
+        if re.search(r"(^|_)r($|_)", n):
+            return "R"
 
-            # Qualifying
-            if re.search(r"(^|_)q($|_)", n) or re.search(r"(^|_)q[123]($|_)", n):
-                return "Q"
+        # Qualifying
+        if re.search(r"(^|_)q($|_)", n) or re.search(r"(^|_)q[123]($|_)", n):
+            return "Q"
 
-            # Practice
-            if re.search(r"(^|_)p($|_)", n) or re.search(r"(^|_)p[123]($|_)", n):
-                return "P"
+        # Practice
+        if re.search(r"(^|_)p($|_)", n) or re.search(r"(^|_)p[123]($|_)", n):
+            return "P"
 
-            return ""
+        return ""
+
+    def _on_estimate_deg(self):
+        track = self.cmbTrack.currentText().strip()
+        tyre = self.cmbTyre.currentText().strip()
+        if not track or not tyre:
+            return
+
+        rows_raw = laps_for_track(track, limit=5000)
+
+        rows = []
+        for r in rows_raw:
+            rows.append(LapRow(
+                created_at=r[0], session=r[1] or "", track=r[2] or "", tyre=r[3] or "",
+                weather=r[4] or "", lap_time_s=r[5], fuel_load=r[6],
+                wear_fl=r[7], wear_fr=r[8], wear_rl=r[9], wear_rr=r[10]
+            ))
+
+        est = estimate_degradation_for_track_tyre(rows, track=track, tyre=tyre, wear_threshold=70.0)
+
+        if est.predicted_laps_to_threshold is None:
+            self.lblDeg.setText(f"{tyre} @ {track}\n{est.notes}")
+            return
+
+        self.lblDeg.setText(
+            f"{tyre} @ {track}\n"
+            f"n={est.n_laps_used} | wear/lap ≈ {est.wear_per_lap_pct:.2f}%\n"
+            f"pace loss ≈ {est.pace_loss_per_pct_s:.3f}s per 1% wear\n"
+            f"laps to 70% ≈ {est.predicted_laps_to_threshold:.1f}\n"
+            f"{est.notes}"
+        )
+
 
 
     def _build_ui(self):
@@ -129,6 +163,28 @@ class MainWindow(QtWidgets.QMainWindow):
         self.logBox.setReadOnly(True)
         self.logBox.setMaximumBlockCount(2000)  # keeps memory low
         layout.addWidget(self.logBox, 4, 0, 1, 2)
+
+        self.grpDeg = QtWidgets.QGroupBox("Degradation model")
+        degLayout = QtWidgets.QGridLayout(self.grpDeg)
+
+        self.cmbTrack = QtWidgets.QComboBox()
+        self.cmbTyre = QtWidgets.QComboBox()
+        self.cmbTyre.addItems(["C1","C2","C3","C4","C5","C6","INTER","WET"])
+
+        self.btnDeg = QtWidgets.QPushButton("Estimate")
+        self.lblDeg = QtWidgets.QLabel("—")
+
+        degLayout.addWidget(QtWidgets.QLabel("Track"), 0, 0)
+        degLayout.addWidget(self.cmbTrack, 0, 1)
+        degLayout.addWidget(QtWidgets.QLabel("Tyre"), 1, 0)
+        degLayout.addWidget(self.cmbTyre, 1, 1)
+        degLayout.addWidget(self.btnDeg, 2, 0, 1, 2)
+        degLayout.addWidget(self.lblDeg, 3, 0, 1, 2)
+
+        layout.addWidget(self.grpDeg, 5, 0, 1, 2)
+
+        self.btnDeg.clicked.connect(self._on_estimate_deg)
+
 
 
         self.status = QtWidgets.QStatusBar()
@@ -260,6 +316,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     @QtCore.Slot()
     def _after_db_update(self):
+        self._refresh_track_combo()
         self._refresh_db_views()
         self.status.showMessage("DB updated from new CSV.", 2500)
 
@@ -270,6 +327,15 @@ class MainWindow(QtWidgets.QMainWindow):
             for c, val in enumerate(row):
                 item = QtWidgets.QTableWidgetItem("" if val is None else str(val))
                 self.tbl.setItem(r, c, item)
+
+    def _refresh_track_combo(self):
+        try:
+            tracks = distinct_tracks()
+        except Exception:
+            tracks = []
+        self.cmbTrack.clear()
+        self.cmbTrack.addItems(tracks)
+
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
         self._stop_services()

@@ -1,9 +1,10 @@
-\
 from __future__ import annotations
+
 import json
 from dataclasses import dataclass, asdict
-from pathlib import Path
-from .paths import config_path
+
+from app.paths import config_path
+
 
 @dataclass
 class AppConfig:

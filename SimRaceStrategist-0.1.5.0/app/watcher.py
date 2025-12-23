@@ -9,7 +9,7 @@ from typing import Callable, Optional
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
-from .paths import cache_dir
+from app.paths import cache_dir
 
 
 def _stable_file(path: Path, checks: int = 3, delay: float = 0.25) -> bool:

@@ -49,7 +49,7 @@ def _parse_dt(s: str) -> Optional[dt.datetime]:
         return None
 
 
-def _wear_avg(row: LapRow) -> Optional[float]:
+def _wear_avg_off(row: LapRow) -> Optional[float]:
     vals = [row.wear_fl, row.wear_fr, row.wear_rl, row.wear_rr]
     vals = [v for v in vals if isinstance(v, (int, float)) and not math.isnan(v)]
     if len(vals) < 2:
@@ -123,6 +123,117 @@ def build_stints(rows: List[LapRow], max_gap_min: int = 12) -> List[List[StintPo
 
     return stints
 
+def mark_in_outlaps_in_points(points: list[StintPoint],
+                              wear_drop_thr: float = 2.0,
+                              outlier_sec: float = 2.5) -> list[dict]:
+    """
+    Like mark_in_outlaps_in_stint(), but works on StintPoint (already has wear_avg).
+    Returns list of dicts:
+      wear_avg, lap_time_s, inlap, outlap, clean
+    """
+    if not points:
+        return []
+
+    w = [p.wear_avg for p in points]
+
+    times = sorted([p.lap_time_s for p in points if p.lap_time_s is not None])
+    med = times[len(times) // 2] if times else None
+
+    inlap = [False] * len(points)
+    outlap = [False] * len(points)
+
+    # Wear% normally INCREASES; a big DROP indicates pit/new tyres/reset
+    for i in range(1, len(points)):
+        if (w[i-1] - w[i]) > wear_drop_thr:
+            inlap[i-1] = True
+            outlap[i] = True
+
+    clean = [True] * len(points)
+    if med is not None:
+        for i, p in enumerate(points):
+            if inlap[i] or outlap[i]:
+                clean[i] = False
+                continue
+            if p.lap_time_s is not None and p.lap_time_s > (med + outlier_sec):
+                clean[i] = False
+
+    out = []
+    for i, p in enumerate(points):
+        out.append({
+            "wear_avg": w[i],
+            "lap_time_s": p.lap_time_s,
+            "inlap": inlap[i],
+            "outlap": outlap[i],
+            "clean": clean[i],
+        })
+    return out
+
+def _wear_avg(l: "LapRow") -> float:
+    vals = [l.wear_fl, l.wear_fr, l.wear_rl, l.wear_rr]
+    vals = [v for v in vals if v is not None]
+    return float(sum(vals) / len(vals)) if vals else 0.0
+
+def mark_in_outlaps_in_stint(laps: list["LapRow"], wear_drop_thr: float = 2.0,
+                             outlier_sec: float = 2.5) -> list[dict]:
+    """
+    Returns list of dicts with:
+      lap: LapRow
+      wear_avg: float
+      inlap: bool
+      outlap: bool
+      clean: bool
+    """
+
+    if not laps:
+        return []
+
+    # Precompute wear avg
+    w = [_wear_avg(x) for x in laps]
+
+    # Median lap time (robust baseline)
+    times = sorted([x.lap_time_s for x in laps if x.lap_time_s is not None])
+    med = times[len(times)//2] if times else None
+
+    inlap = [False] * len(laps)
+    outlap = [False] * len(laps)
+
+    # 1) Detect pit/reset via WEAR DROP (wear% should usually increase; a drop means new tyres/reset)
+    for i in range(1, len(laps)):
+        if (w[i-1] - w[i]) > wear_drop_thr:
+            # lap i-1 is inlap, lap i is outlap
+            inlap[i-1] = True
+            outlap[i] = True
+
+    # 2) Fallback: detect outliers by lap time (only if we have median)
+    if med is not None:
+        for i, lap in enumerate(laps):
+            if lap.lap_time_s is None:
+                continue
+            if lap.lap_time_s > (med + outlier_sec):
+                # If we already know it's in/out -> keep that.
+                # Otherwise: mark as "not clean" (but don't force in/out).
+                pass
+
+    # Clean lap definition: not inlap/outlap and not a big slow outlier
+    clean = [True] * len(laps)
+    if med is not None:
+        for i, lap in enumerate(laps):
+            if inlap[i] or outlap[i]:
+                clean[i] = False
+                continue
+            if lap.lap_time_s is not None and lap.lap_time_s > (med + outlier_sec):
+                clean[i] = False
+
+    out = []
+    for i, lap in enumerate(laps):
+        out.append({
+            "lap": lap,
+            "wear_avg": w[i],
+            "inlap": inlap[i],
+            "outlap": outlap[i],
+            "clean": clean[i],
+        })
+    return out
 
 def estimate_degradation_for_track_tyre(
     rows: List[LapRow],
@@ -139,14 +250,21 @@ def estimate_degradation_for_track_tyre(
     pace_vs_wear = []  # (wear_avg, lap_time_s)
 
     for stint in stints:
-        # wear per lap: deltas between consecutive laps (wear % goes down)
-        for a, b in zip(stint, stint[1:]):
-            dw = (b.wear_avg - a.wear_avg)  # positive if wear decreased
-            if 0.0 < dw < 10.0:  # sanity
-                wear_deltas.append(dw)
+        marked = mark_in_outlaps_in_points(stint, wear_drop_thr=2.0, outlier_sec=2.5)
 
-        for p in stint:
-            pace_vs_wear.append((p.wear_avg, p.lap_time_s))
+    # wear per lap: only between CLEAN consecutive laps (and not across a wear drop reset)
+    for a, b in zip(marked, marked[1:]):
+        if not a["clean"] or not b["clean"]:
+            continue
+        dw = b["wear_avg"] - a["wear_avg"]  # wear% increase per lap
+        if 0.0 < dw < 10.0:
+            wear_deltas.append(dw)
+
+    # pace fit: only CLEAN laps
+    for m in marked:
+        if not m["clean"]:
+            continue
+        pace_vs_wear.append((m["wear_avg"], m["lap_time_s"]))
 
     if len(wear_deltas) < 3 or len(pace_vs_wear) < 6:
         return DegradationEstimate(
@@ -260,3 +378,4 @@ def pit_windows_two_stop(race_laps: int, max_stint_laps: float, min_stint_laps: 
     s2_latest   = max(x[1] for x in feasible)
 
     return (s1_earliest, s1_latest, s2_earliest, s2_latest)
+

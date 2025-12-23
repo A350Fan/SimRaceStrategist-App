@@ -1,10 +1,7 @@
 from __future__ import annotations
-
 import sqlite3
 from typing import Dict, Any, List, Tuple
-
 from .paths import db_path
-
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS laps (
@@ -25,7 +22,6 @@ CREATE TABLE IF NOT EXISTS laps (
 );
 """
 
-
 def connect() -> sqlite3.Connection:
     con = sqlite3.connect(db_path())
     con.execute("PRAGMA journal_mode=WAL;")
@@ -40,7 +36,6 @@ def connect() -> sqlite3.Connection:
 
     con.commit()
     return con
-
 
 def upsert_lap(source_file: str, summary: Dict[str, Any]) -> None:
     con = connect()
@@ -90,7 +85,6 @@ def upsert_lap(source_file: str, summary: Dict[str, Any]) -> None:
             ),
         )
 
-
 def latest_laps(limit: int = 50) -> List[Tuple]:
     con = connect()
     cur = con.execute(
@@ -116,7 +110,6 @@ def latest_laps(limit: int = 50) -> List[Tuple]:
     )
     return cur.fetchall()
 
-
 def lap_counts_by_track() -> List[Tuple[str, int]]:
     con = connect()
     cur = con.execute(
@@ -130,7 +123,6 @@ def lap_counts_by_track() -> List[Tuple[str, int]]:
         """
     )
     return cur.fetchall()
-
 
 def laps_for_track(track: str, limit: int = 2000):
     con = connect()

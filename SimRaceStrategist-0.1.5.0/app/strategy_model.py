@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Optional, Tuple, Dict
+from typing import List, Optional
 import math
 import datetime as dt
 
@@ -379,3 +379,72 @@ def pit_windows_two_stop(race_laps: int, max_stint_laps: float, min_stint_laps: 
 
     return (s1_earliest, s1_latest, s2_earliest, s2_latest)
 
+@dataclass
+class RainPitAdvice:
+    action: str              # "BOX NOW", "BOX IN N", "STAY OUT"
+    target_tyre: Optional[str]
+    laps_until: Optional[int]
+    reason: str
+
+
+def recommend_rain_pit(
+    current_tyre: str,
+    rain_next_pct: float,
+    laps_remaining: int,
+    pit_loss_s: float,
+    # thresholds (tunable)
+    slick_to_inter_on: float = 50.0,
+    inter_to_wet_on: float = 80.0,
+    inter_to_slick_off: float = 30.0,
+    wet_to_inter_off: float = 65.0,
+    # how many laps of "lead time" we allow before calling it
+    lead_laps: int = 2,
+) -> RainPitAdvice:
+    """
+    Pure threshold-based advice using rain_next_pct (0..100).
+    Hysteresis avoids flapping.
+    """
+
+    t = (current_tyre or "").upper().strip()
+    rn = max(0.0, min(100.0, float(rain_next_pct)))
+    lr = max(0, int(laps_remaining))
+
+    def box_now(target: str, why: str):
+        return RainPitAdvice("BOX NOW", target, 0, why)
+
+    def box_in(n: int, target: str, why: str):
+        n = max(1, int(n))
+        return RainPitAdvice(f"BOX IN {n}", target, n, why)
+
+    def stay(why: str):
+        return RainPitAdvice("STAY OUT", None, None, why)
+
+    # If race is basically over, don't do weird things
+    if lr <= 1:
+        return stay("≤1 lap remaining.")
+
+    # SLICKs (C1..C6)
+    if t.startswith("C") or t in ("SLICK", "DRY"):
+        if rn >= slick_to_inter_on:
+            # if it's already clearly coming, box now; otherwise "box in"
+            if rn >= slick_to_inter_on + 10:
+                return box_now("INTER", f"Rain(next)={rn:.0f}% ≥ {slick_to_inter_on:.0f}%.")
+            return box_in(min(lead_laps, lr-1), "INTER", f"Rain(next) trending up ({rn:.0f}%).")
+        return stay(f"Rain(next)={rn:.0f}% below Inter trigger ({slick_to_inter_on:.0f}%).")
+
+    # INTERs
+    if "INTER" in t or t in ("I",):
+        if rn >= inter_to_wet_on:
+            return box_now("WET", f"Rain(next)={rn:.0f}% ≥ {inter_to_wet_on:.0f}%.")
+        if rn <= inter_to_slick_off:
+            return box_now("SLICK", f"Rain(next)={rn:.0f}% ≤ {inter_to_slick_off:.0f}%.")
+        return stay(f"Rain(next)={rn:.0f}% in Inter band.")
+
+    # WETs
+    if "WET" in t or t in ("W",):
+        if rn <= wet_to_inter_off:
+            return box_now("INTER", f"Rain(next)={rn:.0f}% ≤ {wet_to_inter_off:.0f}%.")
+        return stay(f"Rain(next)={rn:.0f}% still high.")
+
+    # Unknown tyre label
+    return stay(f"Unknown tyre '{current_tyre}'.")

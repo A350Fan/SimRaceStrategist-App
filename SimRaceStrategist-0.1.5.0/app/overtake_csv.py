@@ -4,9 +4,7 @@ import csv
 import io
 from pathlib import Path
 from typing import Any, Dict
-
 import pandas as pd
-
 
 def _parse_two_line_block(header_line: str, data_line: str) -> Dict[str, str]:
     header = next(csv.reader([header_line]))
@@ -14,7 +12,6 @@ def _parse_two_line_block(header_line: str, data_line: str) -> Dict[str, str]:
     if len(data) < len(header):
         data += [""] * (len(header) - len(data))
     return {h.strip(): d.strip() for h, d in zip(header, data)}
-
 
 def parse_overtake_csv(path: Path) -> Dict[str, Any]:
     """
@@ -50,7 +47,6 @@ def parse_overtake_csv(path: Path) -> Dict[str, Any]:
     df = pd.read_csv(io.StringIO(telemetry_text))
 
     return {"player": player, "game": game, "track": track, "setup": setup, "telemetry": df}
-
 
 def lap_summary(parsed: Dict[str, Any]) -> Dict[str, Any]:
     """Create a compact summary row for the database."""

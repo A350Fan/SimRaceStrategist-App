@@ -3,13 +3,10 @@ from __future__ import annotations
 import datetime
 from pathlib import Path
 from typing import Callable, Optional
-
 from .paths import app_dir
-
 
 def log_file_path() -> Path:
     return app_dir() / "app.log"
-
 
 class AppLogger:
     def __init__(self, ui_sink: Optional[Callable[[str], None]] = None):

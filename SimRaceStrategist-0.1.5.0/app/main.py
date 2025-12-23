@@ -1,4 +1,4 @@
-\
+
 from __future__ import annotations
 import sys
 from pathlib import Path
@@ -6,16 +6,17 @@ from typing import Optional
 
 from PySide6 import QtCore, QtWidgets, QtGui
 
-from .config import load_config, save_config, AppConfig
-from .watcher import FolderWatcher
-from .overtake_csv import parse_overtake_csv, lap_summary
-from .db import upsert_lap, latest_laps, lap_counts_by_track
-from .strategy import generate_placeholder_cards
-from .f1_udp import F1UDPListener, F1LiveState
-from .logging_util import AppLogger
-from .strategy_model import LapRow, estimate_degradation_for_track_tyre, pit_window_one_stop, pit_windows_two_stop
+from app.config import load_config, save_config, AppConfig
+from app.watcher import FolderWatcher
+from app.overtake_csv import parse_overtake_csv, lap_summary
+from app.db import upsert_lap, latest_laps, lap_counts_by_track
+from app.strategy import generate_placeholder_cards
+from app.f1_udp import F1UDPListener, F1LiveState
+from app.logging_util import AppLogger
+from app.strategy_model import LapRow, estimate_degradation_for_track_tyre, pit_window_one_stop, pit_windows_two_stop, \
+    recommend_rain_pit, RainPitAdvice
 
-from .db import distinct_tracks, laps_for_track
+from app.db import distinct_tracks, laps_for_track
 
 import re
 import time
@@ -39,6 +40,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._refresh_db_views()
         self._refresh_track_combo()
         self._start_services_if_possible()
+        self._live_state: F1LiveState = F1LiveState()
 
     def _detect_session(self, src: Path) -> str:
         n = src.stem.lower()
@@ -146,16 +148,26 @@ class MainWindow(QtWidgets.QMainWindow):
         # Live state panel
         self.grpLive = QtWidgets.QGroupBox("Live (F1 UDP)")
         liveLayout = QtWidgets.QHBoxLayout(self.grpLive)
-        self.lblSC = QtWidgets.QLabel("SC/VSC: –")
-        self.lblWeather = QtWidgets.QLabel("Weather: –")
-        self.lblRain = QtWidgets.QLabel("Rain(next): –")
+        self.lblSC = QtWidgets.QLabel("SC/VSC: n/a")
+        self.lblWeather = QtWidgets.QLabel("Weather: n/a")
+        self.lblRain = QtWidgets.QLabel("Rain(next): n/a")
         for w in (self.lblSC, self.lblWeather, self.lblRain):
             w.setMinimumWidth(200)
         liveLayout.addWidget(self.lblSC)
         liveLayout.addWidget(self.lblWeather)
         liveLayout.addWidget(self.lblRain)
+        self.lblRainAdvice = QtWidgets.QLabel("Rain pit: n/a")
+        self.lblRainAdvice.setStyleSheet("font-weight: 700;")
+        self.lblRainAdvice.setMinimumWidth(320)
+        liveLayout.addWidget(self.lblRainAdvice)
         liveLayout.addStretch(1)
         layout.addWidget(self.grpLive, 1, 0, 1, 2)
+        self.lblFieldShare = QtWidgets.QLabel("Field: Inter/Wet share: n/a")
+        self.lblFieldDelta = QtWidgets.QLabel("Field: Δpace (I-S): n/a")
+        self.lblFieldShare.setMinimumWidth(240)
+        self.lblFieldDelta.setMinimumWidth(240)
+        liveLayout.addWidget(self.lblFieldShare)
+        liveLayout.addWidget(self.lblFieldDelta)
 
         # Strategy cards
         self.grpStrat = QtWidgets.QGroupBox("Strategy Cards (Prototype)")
@@ -287,22 +299,56 @@ class MainWindow(QtWidgets.QMainWindow):
 
     @QtCore.Slot(object)
     def _on_live_state(self, state: F1LiveState):
-        # called from background thread: marshal to UI thread
+        self._live_state = state
         QtCore.QMetaObject.invokeMethod(
             self,
             "_update_live_labels",
             QtCore.Qt.QueuedConnection,
-            QtCore.Q_ARG(int, -1 if state.safety_car_status is None else state.safety_car_status),
-            QtCore.Q_ARG(int, -1 if state.weather is None else state.weather),
-            QtCore.Q_ARG(int, -1 if state.rain_percent_next is None else state.rain_percent_next),
         )
 
-    @QtCore.Slot(int, int, int)
-    def _update_live_labels(self, sc: int, weather: int, rain: int):
-        sc_text = {0:"Green",1:"Safety Car",2:"VSC",3:"Formation"}.get(sc, "–")
+    @QtCore.Slot()
+    def _update_live_labels(self):
+        state = getattr(self, "_live_state", F1LiveState())
+
+        sc = -1 if state.safety_car_status is None else int(state.safety_car_status)
+        weather = -1 if state.weather is None else int(state.weather)
+        rain = -1 if state.rain_percent_next is None else int(state.rain_percent_next)
+
+        sc_text = {0: "Green", 1: "Safety Car", 2: "VSC", 3: "Formation"}.get(sc, "–")
         self.lblSC.setText(f"SC/VSC: {sc_text}")
-        self.lblWeather.setText(f"Weather(enum): {weather if weather>=0 else '–'}")
-        self.lblRain.setText(f"Rain(next): {rain if rain>=0 else '–'}")
+        self.lblWeather.setText(f"Weather(enum): {weather if weather >= 0 else 'n/a'}")
+        self.lblRain.setText(f"Rain(next): {rain if rain >= 0 else 'n/a'}")
+
+        # Rain pit advice
+        try:
+            rn = float(rain) if rain >= 0 else 0.0
+        except Exception:
+            rn = 0.0
+
+        current_tyre = self.cmbTyre.currentText().strip() or "C4"
+        laps_remaining = int(self.spinRaceLaps.value())
+        pit_loss_s = 22.0
+
+        ad = recommend_rain_pit(
+            current_tyre=current_tyre,
+            rain_next_pct=rn,
+            laps_remaining=laps_remaining,
+            pit_loss_s=pit_loss_s
+        )
+        self.lblRainAdvice.setText(f"Rain pit: {ad.action} → {ad.target_tyre or 'n/a'} | {ad.reason}")
+
+        # Field metrics (aus state, den du in f1_udp.py befüllst)
+        if state.inter_share is None or state.inter_count is None or state.slick_count is None:
+            self.lblFieldShare.setText("Field: Inter/Wet share: n/a")
+        else:
+            total = state.inter_count + state.slick_count
+            self.lblFieldShare.setText(
+                f"Field: Inter/Wet share: {state.inter_share * 100:.0f}% ({state.inter_count}/{total})")
+
+        if state.pace_delta_inter_vs_slick_s is None:
+            self.lblFieldDelta.setText("Field: Δpace (I-S): n/a")
+        else:
+            self.lblFieldDelta.setText(f"Field: Δpace (I-S): {state.pace_delta_inter_vs_slick_s:+.2f}s")
 
     def _on_new_csv(self, src: Path, cached: Path):
         # ---- DEDUPE: gleiche Datei (create/modify) nur 1x verarbeiten ----
@@ -332,12 +378,14 @@ class MainWindow(QtWidgets.QMainWindow):
         # ------------------------------------------------------------------
 
         # NEVER process files from our own cache folder (prevents infinite loops)
-        try:
-            cache_dir = Path(app_data_dir()) / "cache"
-            if cache_dir in src.resolve().parents:
-                return
-        except Exception:
-            pass
+
+        # try:
+        #     cache_dir = Path(app_data_dir()) / "cache"
+        #     if cache_dir in src.resolve().parents:
+        #         return
+        # except Exception:
+        #     pass
+
         #-------------------------------------------------------------------
         
         name = src.stem.lower()
@@ -393,7 +441,7 @@ class MainWindow(QtWidgets.QMainWindow):
             vals = [v for v in vals if v is not None]
             return (sum(vals) / len(vals)) if vals else None
 
-        # Gruppieren nach (game, track, session)  -> damit Boxenstopp über Tyre-Wechsel erkannt wird
+        # Gruppieren nach (game, track, session) → damit Boxenstopp über Tyre-Wechsel erkannt wird
         by_group = {}
         for i, row in enumerate(rows):
             key = (row[1], row[2], row[3])
@@ -425,13 +473,13 @@ class MainWindow(QtWidgets.QMainWindow):
                     tags[idxs[k-1]] = "IN"
                     tags[idxs[k]] = "OUT"
 
-            # für SHIFT/SLOW eine stabile "alt -> neu" Reihenfolge:
+            # für SHIFT/SLOW eine stabile "alt → neu" Reihenfolge:
             # tie-breaker: bei gleicher created_at ist höherer rows-index = älter (weil latest_laps liefert neueste zuerst)
             idxs_time = sorted(idxs, key=lambda j: (rows[j][0], -j))
 
 
             # SHIFT: detect a sustained pace step INSIDE a stint (not across IN/OUT)
-            SHIFT_JUMP_SEC = 1.5       # <- realistischer als 2.0 für "Regen + alte Reifen"
+            SHIFT_JUMP_SEC = 1.5       # ← realistischer als 2.0 für "Regen + alte Reifen"
             SHIFT_AVG_DELTA_SEC = 1  # avg(after) - avg(before) mindestens so viel
             WIN = 3                    # 3 Laps vor/nachher
 
@@ -498,7 +546,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 if prev_lt is None or next_lt is None:
                     continue
 
-                # SLOW nur wenn "Peak": deutlich langsamer als beide Nachbarn
+                # SLOW nur, wenn "Peak": deutlich langsamer als beide Nachbarn
                 if (lt - prev_lt) > SLOW_JUMP_SEC and (lt - next_lt) > SLOW_JUMP_SEC:
                     tags[j] = "SLOW"
 

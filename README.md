@@ -1,5 +1,4 @@
-\
-# SimRaceStrategist (Prototype) – Overtake Telemetry Tool CSV + F1 UDP (SC/Wetter)
+# SimRaceStrategist (Early Prototype) – basierend auf CSVs aus Iko Reins Telemetry Tool + F1 UDP (SC/Wetter/Gegner)
 
 Dieses Projekt ist ein **laufeinfaches Grundgerüst**:
 - **Read-only Ordner-Watcher**: beobachtet die CSVs vom Overtake Telemetry Tool und kopiert sie in einen Cache (damit nichts „angefasst“ wird).
@@ -11,10 +10,10 @@ Dieses Projekt ist ein **laufeinfaches Grundgerüst**:
 
 ---
 
-## 1) Installation (Windows)
+## 1) Einrichtung (Windows)
 
 1. Python 3.11 oder 3.12 installieren.
-2. In den Projektordner wechseln und Abhängigkeiten installieren:
+2. In den Projektordner wechseln und Abhängigkeiten z. B. per Powershell installieren:
 
 ```powershell
 cd SimRaceStrategist
@@ -28,13 +27,14 @@ pip install -r requirements.txt
 ```powershell
 python -m app.main
 ```
+4. Iko Reins Telemetrie Tool herunterladen und einrichten (https://www.overtake.gg/downloads/telemetry-tool-for-f1-25-and-many-other-games.77557/)
 
 ---
 
 ## 2) Ordner einstellen (Overtake Telemetry Tool)
 
 In der App:
-- **Settings → Telemetry Folder** auswählen (dein Root-Ordner, z.B. `F:\OneDrive\Dokumente\11 Gaming-PC\SimRacingTelemetrie`)
+- **Settings → Telemetry Folder** auswählen (Root-Ordner, in welchem die CSVs von Iko Reins Tool gespeichert werden, z.B. `C:\Dokumente\SimRacingTelemetrie`)
 - Die App sucht dann automatisch in Unterordnern nach CSVs (z.B. `lapdata\f1_2025\...`)
 
 Die App arbeitet **read-only**:
@@ -47,13 +47,14 @@ Die App arbeitet **read-only**:
 
 Im F1 Spiel:
 - UDP Telemetry aktivieren
+- Broadcast für bessere Kompatibilität aktivieren
 - IP: deine PC-IP (oder 127.0.0.1)
 - Port (Standard): 20777
 
 In der App:
 - **Settings → UDP Port** (Standard 20777)
 
-> Aktuell wird nur minimal geparst (SC/VSC & Weather/Forecast). Das reicht für „Instant Calls“.
+> Aktuell wird nur minimal geparst (SC/VSC & Weather/Forecast,AI Gegner).
 
 ---
 
@@ -68,7 +69,7 @@ In der App:
 
 ## 5) Nächste Ausbaustufe
 
-- Regen-Crossover: Slick vs Inter vs Wet aus historischen Laps + Forecast
-- Plan A/B/C Generator aus DB (Degradation-Model)
+- Regen-Crossover: Slick vs Inter vs Wet aus historischen Laps (z. B. Shifting Lap Times), aktuellem Wetter, Wetterbericht, Temperatur, AI-Gegner
+- Plan A/B/C Generator aus DB (Degradation-Model+Lap Times
 - SC Decision Panel: „Box/Stay/Opposite“ mit Delta-Schätzung
 

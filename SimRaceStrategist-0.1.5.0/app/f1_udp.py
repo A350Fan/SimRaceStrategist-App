@@ -1,5 +1,6 @@
 from __future__ import annotations
 import socket
+import statistics
 import struct
 import threading
 import time
@@ -17,6 +18,12 @@ class F1LiveState:
     pace_delta_inter_vs_slick_s: Optional[float] = None
     inter_count: Optional[int] = None
     slick_count: Optional[int] = None
+
+    track_temp_c: Optional[float] = None
+    air_temp_c: Optional[float] = None
+    # optional: einfache Trends (aus letzten n Samples)
+    track_temp_trend_c_per_min: Optional[float] = None
+    rain_trend_pct_per_min: Optional[float] = None
 
 
 def _read_header(data: bytes):
@@ -77,6 +84,9 @@ class F1UDPListener:
         self._pit_status = [0] * 22  # 0 none, 1 pitting, 2 in pit area
         self._pending_tyre = [None] * 22  # Reifenwahl während Pit (wird erst beim Exit übernommen)
 
+        self._tyre_actual = [None] * 22
+        self._tyre_visual = [None] * 22
+
     def start(self):
         self._stop.clear()
         self._thread = threading.Thread(target=self._run, daemon=True)
@@ -128,7 +138,7 @@ class F1UDPListener:
 
                 safety_car_off = base + 19 + (21 * 5)
                 if safety_car_off + 3 >= len(data):
-                        continue
+                    continue
 
                 sc_raw = data[safety_car_off]          # 0..3
                 num_fc = data[safety_car_off + 2]
@@ -162,54 +172,73 @@ class F1UDPListener:
                         changed = True
 
                 if changed:
-                    self.on_state(self.state)
+                    self._dirty = True
+
+
 
 
             elif pid == 2:
 
                 base = 24
 
-                remaining = len(data) - base
+                car_size_guess = (len(data) - base) // 22
 
-                if remaining < 22 * 4:
+                car_size = 57
+
+                if len(data) < base + 22 * car_size:
                     continue
 
-                car_size = remaining // 22  # bei dir i.d.R. 57
-
                 changed = False
+
+                if not hasattr(self, "_last_lap_scan_t"):
+                    self._last_lap_scan_t = 0.0
+                nowt = time.monotonic()
+                do_scan = (nowt - self._last_lap_scan_t) >= 1.0
+                if do_scan:
+                    self._last_lap_scan_t = nowt
 
                 for i in range(22):
 
                     off = base + i * car_size
 
-                    if off + 4 > len(data):
-                        break
+                    last_ms = struct.unpack_from("<I", data, off + 48)[0]
 
-                    (ms,) = struct.unpack_from("<I", data, off)  # lastLapTimeInMS liegt am Anfang
+                    # Finde den wahrscheinlichsten LapTime-Field im CarBlock:
+                    # - plausibel (40..360s)
+                    # - NICHT extrem glatt (z.B. vielfaches von 256 ist verdächtig)
+                    # - bevorzugt Wert, der sich gegenüber dem gespeicherten _last_lap_ms ändert
 
-                    if 10_000 <= ms <= 300_000:  # 10s..300s plausibel
+                    # --- normaler Pfad: nur plausible Zeiten übernehmen ---
+                    if 40_000 <= last_ms <= 360_000:
+                        if i == 0:
+                            print("[LAP DEBUG] car0 last_ms", last_ms, "cat", self._tyre_cat[0])
 
-                        if self._last_lap_ms[i] != ms:
-                            self._last_lap_ms[i] = ms
-
+                        if self._last_lap_ms[i] != last_ms:
+                            self._last_lap_ms[i] = last_ms
                             changed = True
+
+                    if i == 0 and do_scan:
+
+                        # erst grob schätzen (nur debug)
+                        car_size_guess = (len(data) - base) // 22
+                        print("[LAP SCAN] car_size_guess:", car_size_guess, "packet_len:", len(data))
+
+                        def scan_car(car_index: int):
+                            start = base + car_index * car_size_guess
+                            end = min(len(data), start + car_size_guess)
+                            blk = data[start:end]
+                            hits = []
+                            for k in range(0, min(len(blk), 120) - 4, 4):
+                                v = struct.unpack_from("<I", blk, k)[0]
+                                if 40_000 <= v <= 360_000:
+                                    hits.append((k, v))
+                            print(f"[LAP SCAN] car{car_index} hits:", hits)
+
+                        scan_car(0)
+                        scan_car(1)
 
                 if changed:
                     self._dirty = True
-
-                pit = data[off + 34]  # m_pitStatus
-                self._pit_status[i] = pit
-
-                # Wenn Fahrer wieder draußen ist, übernehmen wir den Reifen, der während des Stops gemeldet wurde
-                if pit == 0 and self._pending_tyre[i] is not None:
-                    if self._tyre_cat[i] != self._pending_tyre[i]:
-                        self._tyre_cat[i] = self._pending_tyre[i]
-                        changed = True
-                    self._pending_tyre[i] = None
-
-
-
-
 
 
             elif pid == 7:
@@ -239,12 +268,8 @@ class F1UDPListener:
 
                         visual = data[off + 30]
 
-
-                        if i == 0:
-                            block = data[off:off + 55]  # car 0
-                            hits = [(idx, b) for idx, b in enumerate(block) if b in (7, 8)]
-                            print("[TYRE SCAN] indices with 7/8:", hits)
-                            print("[TYRE SCAN] bytes 20..40:", list(enumerate(block[20:41], start=20)))
+                        self._tyre_actual[i] = actual
+                        self._tyre_visual[i] = visual
 
                     except IndexError:
 
@@ -276,6 +301,14 @@ class F1UDPListener:
                             self._tyre_cat[i] = tyre_cat
                             changed = True
 
+                # DEBUG: nach dem Verarbeiten aller 22 Autos einmal ausgeben (sonst spam)
+                interwet = []
+                for j in range(22):
+                    if self._tyre_cat[j] in ("INTER", "WET"):
+                        interwet.append(
+                            (j, self._tyre_cat[j], self._last_lap_ms[j], self._tyre_actual[j], self._tyre_visual[j]))
+                print("[TYRE DEBUG] inter/wet cars:", interwet)
+
                 if changed:
                     self._dirty = True
 
@@ -284,7 +317,10 @@ class F1UDPListener:
         sock.close()
 
     def _update_field_metrics_and_emit(self):
-        # counts
+
+        unknown = sum(1 for x in self._tyre_cat if x is None)
+        print("[TYRE DEBUG] unknown cats:", unknown, "sample0:", self._tyre_cat[0])
+
         inter = 0
         slick = 0
         inter_laps = []
@@ -298,35 +334,36 @@ class F1UDPListener:
                 inter += 1
                 if isinstance(ms, int) and ms > 0:
                     inter_laps.append(ms / 1000.0)
+
             elif cat == "SLICK":
                 slick += 1
                 if isinstance(ms, int) and ms > 0:
                     slick_laps.append(ms / 1000.0)
 
-        denom = inter + slick
-        self.state.inter_count = inter if denom else None
-        self.state.slick_count = slick if denom else None
-        self.state.inter_share = (inter / denom) if denom else None
+        total = inter + slick
+        self.state.inter_share = (inter / total) if total > 0 else 0.0
+        self.state.inter_count = inter
+        self.state.slick_count = slick
 
-        # Δpace (Inter - Slick): robust über Median
-        def median(xs):
-            xs = sorted(xs)
-            n = len(xs)
-            if n == 0:
-                return None
-            mid = n // 2
-            return xs[mid] if (n % 2 == 1) else (xs[mid - 1] + xs[mid]) / 2.0
-
-        mi = median(inter_laps)
-        ms = median(slick_laps)
-
-        if mi is not None and ms is not None and len(inter_laps) >= 2 and len(slick_laps) >= 2:
-            self.state.pace_delta_inter_vs_slick_s = mi - ms
+        # Delta Pace I-S: Median(inter/wet) - Median(slick)
+        if len(inter_laps) >= 1 and len(slick_laps) >= 2:   # inter_laps Wert standard=2, für test 1
+            try:
+                inter_med = statistics.median(inter_laps)
+                slick_med = statistics.median(slick_laps)
+                self.state.pace_delta_inter_vs_slick_s = inter_med - slick_med
+            except Exception:
+                self.state.pace_delta_inter_vs_slick_s = None
         else:
             self.state.pace_delta_inter_vs_slick_s = None
 
-        # push to UI
-        self.on_state(self.state)
+        # emit
+        try:
+            self.on_state(self.state)
+        except Exception:
+            pass
+
+        print("[DELTA DEBUG] inter_laps", len(inter_laps), "slick_laps", len(slick_laps),
+              "delta", self.state.pace_delta_inter_vs_slick_s)
 
     def _maybe_emit(self):
         if not getattr(self, "_dirty", False):

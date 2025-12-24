@@ -9,14 +9,12 @@ from PySide6 import QtCore, QtWidgets, QtGui
 from app.config import load_config, save_config, AppConfig
 from app.watcher import FolderWatcher
 from app.overtake_csv import parse_overtake_csv, lap_summary
-from app.db import upsert_lap, latest_laps, lap_counts_by_track
+from app.db import upsert_lap, latest_laps, lap_counts_by_track, distinct_tracks, laps_for_track
 from app.strategy import generate_placeholder_cards
 from app.f1_udp import F1UDPListener, F1LiveState
 from app.logging_util import AppLogger
-from app.strategy_model import LapRow, estimate_degradation_for_track_tyre, pit_window_one_stop, pit_windows_two_stop, \
-    recommend_rain_pit, RainPitAdvice
-
-from app.db import distinct_tracks, laps_for_track
+from app.strategy_model import LapRow, estimate_degradation_for_track_tyre, pit_window_one_stop, pit_windows_two_stop, recommend_rain_pit, RainPitAdvice
+from app.rain_engine import RainEngine
 
 import re
 import time
@@ -41,6 +39,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self._refresh_track_combo()
         self._start_services_if_possible()
         self._live_state: F1LiveState = F1LiveState()
+        self.rain_engine = RainEngine()
+
+        self._your_last_lap_s = None
+        self._your_last_tyre = None
+        self._your_last_track = None
 
     def _detect_session(self, src: Path) -> str:
         n = src.stem.lower()
@@ -315,9 +318,12 @@ class MainWindow(QtWidgets.QMainWindow):
         rain = -1 if state.rain_percent_next is None else int(state.rain_percent_next)
 
         sc_text = {0: "Green", 1: "Safety Car", 2: "VSC", 3: "Formation"}.get(sc, "–")
-        self.lblSC.setText(f"SC/VSC: {sc_text}")
-        self.lblWeather.setText(f"Weather(enum): {weather if weather >= 0 else 'n/a'}")
-        self.lblRain.setText(f"Rain(next): {rain if rain >= 0 else 'n/a'}")
+        if self.lblSC.text() != sc_text:
+            self.lblSC.setText(f"SC/VSC: {sc_text}")
+        if self.lblWeather.text() != weather:
+            self.lblWeather.setText(f"Weather(enum): {weather if weather >= 0 else 'n/a'}")
+        if self.lblRain.text() != rain:
+            self.lblRain.setText(f"Rain(next): {rain if rain >= 0 else 'n/a'}")
 
         # Rain pit advice
         try:
@@ -329,13 +335,37 @@ class MainWindow(QtWidgets.QMainWindow):
         laps_remaining = int(self.spinRaceLaps.value())
         pit_loss_s = 22.0
 
-        ad = recommend_rain_pit(
+        track = self.cmbTrack.currentText().strip()
+
+        # Tyre für Engine: wenn du willst, nimm “deinen letzten CSV-Reifen” statt UI:
+        current_tyre = (self._your_last_tyre or self.cmbTyre.currentText().strip() or "C4")
+
+        laps_remaining = int(self.spinRaceLaps.value())
+        pit_loss_s = 22.0  # später dynamisch (SC/VSC) wenn du willst
+
+        db_rows = None
+        if track:
+            try:
+                db_rows = laps_for_track(track, limit=5000)
+            except Exception:
+                db_rows = None
+
+        out = self.rain_engine.update(
+            state,
+            track=track,
             current_tyre=current_tyre,
-            rain_next_pct=rn,
             laps_remaining=laps_remaining,
-            pit_loss_s=pit_loss_s
+            pit_loss_s=pit_loss_s,
+            db_rows=db_rows,
+            your_last_lap_s=self._your_last_lap_s,  # <-- jetzt aktiv!
         )
-        self.lblRainAdvice.setText(f"Rain pit: {ad.action} → {ad.target_tyre or 'n/a'} | {ad.reason}")
+
+        ad = out.advice
+        self.lblRainAdvice.setText(
+            f"Rain pit: {ad.action} → {ad.target_tyre or 'n/a'} | "
+            f"wet={out.wetness:.2f} conf={out.confidence:.2f} | {ad.reason}"
+        )
+        self.status.showMessage(out.debug)
 
         # Field metrics (aus state, den du in f1_udp.py befüllst)
         if state.inter_share is None or state.inter_count is None or state.slick_count is None:
@@ -405,6 +435,16 @@ class MainWindow(QtWidgets.QMainWindow):
         try:
             parsed = parse_overtake_csv(cached)
             summ = lap_summary(parsed)
+            try:
+                self._your_last_lap_s = float(summ.get("lap_time_s")) if summ.get("lap_time_s") is not None else None
+            except Exception:
+                self._your_last_lap_s = None
+
+            self._your_last_tyre = (summ.get("tyre") or None)
+            self._your_last_track = (summ.get("track") or None)
+            self.logger.info(
+                f"[PLAYER] last_lap={self._your_last_lap_s} tyre={self._your_last_tyre} track={self._your_last_track}")
+
             if not isinstance(summ, dict):
                 raise ValueError("lap_summary did not return a dict")
             summ["session"] = session

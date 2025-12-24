@@ -40,6 +40,26 @@ class DegradationEstimate:
     notes: str
     max_stint_from_fresh_laps: Optional[float] = None
 
+def normalize_tyre(t: str) -> str:
+    if not t:
+        return ""
+    s = t.strip()
+    su = s.upper()
+
+    # Rain compounds aus CSV -> UI-Enum
+    if su == "INTERMEDIATE":
+        return "INTER"
+    if su == "WET":
+        return "WET"
+
+    # Slicks: C1..C6 unverändert (egal ob groß/klein)
+    if su in ("C1", "C2", "C3", "C4", "C5", "C6"):
+        return su
+
+    # fallback
+    return su
+
+
 
 def _parse_dt(s: str) -> Optional[dt.datetime]:
     # created_at is sqlite datetime('now') => 'YYYY-MM-DD HH:MM:SS'
@@ -242,8 +262,35 @@ def estimate_degradation_for_track_tyre(
     wear_threshold: float = 70.0
 ) -> DegradationEstimate:
     # filter
-    filt = [r for r in rows if (r.track == track and r.tyre == tyre and r.session in ("P", "R"))]
+    tyre_norm = normalize_tyre(tyre)
+
+    filt = [
+        r for r in rows
+        if (
+                r.track == track
+                and normalize_tyre(r.tyre) == tyre_norm
+                and r.session in ("P", "R")
+        )
+    ]
+
+    if not filt:
+        return DegradationEstimate(
+            n_laps_used=0,
+            wear_per_lap_pct=0.0,
+            pace_loss_per_pct_s=0.0,
+            predicted_laps_to_threshold=None,
+            notes=f"No data for track={track}, tyre={tyre_norm}."
+        )
+
     stints = build_stints(filt)
+    if not stints:
+        return DegradationEstimate(
+            n_laps_used=0,
+            wear_per_lap_pct=0.0,
+            pace_loss_per_pct_s=0.0,
+            predicted_laps_to_threshold=None,
+            notes="No stints could be built from filtered laps."
+        )
 
     # flatten stint-to-stint deltas
     wear_deltas = []

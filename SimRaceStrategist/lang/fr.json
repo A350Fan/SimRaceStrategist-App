@@ -1,0 +1,67 @@
+{
+  "app.title": "SimRaceStrategist – Prototype",
+
+  "tab.live": "Live",
+  "tab.db": "Tours / DB",
+  "tab.model": "Modèle",
+  "tab.settings": "Paramètres",
+
+  "common.na": "n/d",
+
+  "live.sc_fmt": "SC/VSC : {status}",
+  "live.sc_green": "Vert",
+  "live.sc_sc": "Safety Car",
+  "live.sc_vsc": "VSC",
+  "live.sc_formation": "Tour de formation",
+
+  "live.weather_enum_fmt": "Météo (enum) : {w}",
+
+  "live.rain_line_fmt": "Pluie : {now} | Prévision (3/5/10/15/20) : {fc}",
+
+  "live.rain_pit_advice_fmt":
+    "Arrêt pluie : {action} → {target} | humidité={wet:.2f} conf={conf:.2f} | {reason}",
+
+  "live.field_share_na": "Peloton : part Inter/Wet : n/d",
+  "live.field_share_fmt":
+    "Peloton : part Inter/Wet : {pct:.0f}% ({inter}/{total})",
+
+  "live.field_delta_na": "Peloton : Δ rythme (I-S) : n/d",
+  "live.field_delta_fmt":
+    "Peloton : Δ rythme (I-S) : {delta:+.2f}s",
+
+  "live.your_prefix": "Vous : ",
+  "live.your_delta_na_fmt": "Vous : Δ(I-S) : n/d ({rc})",
+  "live.your_part_is_fmt": "Δ(I-S) {d:+.2f}s",
+  "live.your_part_ws_fmt": "Δ(W-S) {d:+.2f}s",
+
+  "settings.pick_folder": "Choisir le dossier…",
+  "settings.udp_enabled": "UDP activé (SC/Météo F1)",
+  "settings.apply": "Appliquer les paramètres",
+  "settings.language_group": "Langue",
+  "settings.language_label": "Langue",
+  "settings.language_apply": "Appliquer la langue",
+
+  "msg.language_applied": "Langue appliquée.",
+
+  "action.STAY_OUT": "STAY OUT",
+  "action.PIT_NOW": "BOX BOX BOX",
+  "action.PIT_THIS_LAP": "BOX ce tour",
+  "action.PIT_WINDOW": "Fenêtre de stand",
+
+  "tyre.SLICK": "Slick",
+  "tyre.INTER": "Intermédiaire",
+  "tyre.WET": "Pluie",
+
+  "live.group_title": "Live (F1 UDP)",
+  "live.weather_na": "Météo: n/d",
+  "live.rain_na": "Pluie (suiv.): n/d",
+  "live.rain_pit_na": "Pit pluie: n/d",
+
+  "cards.group_title": "Cartes de stratégie (Prototype)",
+  "cards.tyres_prefix": "Pneus:",
+
+  "live.sc_na": "SC/VSC : n/d",
+  "cards.next_pit_fmt": "Prochain arrêt : tour {lap}"
+
+
+}

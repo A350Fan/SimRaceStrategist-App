@@ -1,0 +1,66 @@
+{
+  "app.title": "SimRaceStrategist – ආකෘති ආවෘත්තිය",
+
+  "tab.live": "සජීවී",
+  "tab.db": "වට / දත්ත ගබඩාව",
+  "tab.model": "මොඩලය",
+  "tab.settings": "සැකසුම්",
+
+  "common.na": "නොමැත",
+
+  "live.sc_fmt": "SC/VSC: {status}",
+  "live.sc_green": "කොළ",
+  "live.sc_sc": "Safety Car",
+  "live.sc_vsc": "VSC",
+  "live.sc_formation": "Formation Lap",
+
+  "live.weather_enum_fmt": "කාලගුණය (enum): {w}",
+
+  "live.rain_line_fmt":
+    "වැසි: {now} | අනාවැකි (3/5/10/15/20): {fc}",
+
+  "live.rain_pit_advice_fmt":
+    "වැසි Pit: {action} → {target} | තෙත්භාවය={wet:.2f} conf={conf:.2f} | {reason}",
+
+  "live.field_share_na": "ක්ෂේත්‍රය: Inter/Wet ප්‍රමාණය: නොමැත",
+  "live.field_share_fmt":
+    "ක්ෂේත්‍රය: Inter/Wet ප්‍රමාණය: {pct:.0f}% ({inter}/{total})",
+
+  "live.field_delta_na": "ක්ෂේත්‍රය: Δ වේගය (I-S): නොමැත",
+  "live.field_delta_fmt":
+    "ක්ෂේත්‍රය: Δ වේගය (I-S): {delta:+.2f}s",
+
+  "live.your_prefix": "ඔබ: ",
+  "live.your_delta_na_fmt": "ඔබ: Δ(I-S): නොමැත ({rc})",
+  "live.your_part_is_fmt": "Δ(I-S) {d:+.2f}s",
+  "live.your_part_ws_fmt": "Δ(W-S) {d:+.2f}s",
+
+  "settings.pick_folder": "ෆෝල්ඩරය තෝරන්න…",
+  "settings.udp_enabled": "UDP සක්‍රිය (F1 SC/කාලගුණය)",
+  "settings.apply": "සැකසුම් යොදන්න",
+  "settings.language_group": "භාෂාව",
+  "settings.language_label": "භාෂාව",
+  "settings.language_apply": "භාෂාව යොදන්න",
+
+  "msg.language_applied": "භාෂාව යොදන ලදි.",
+
+  "action.STAY_OUT": "STAY OUT",
+  "action.PIT_NOW": "BOX BOX BOX",
+  "action.PIT_THIS_LAP": "BOX මෙම වටයේ",
+  "action.PIT_WINDOW": "Pit Window",
+
+  "tyre.SLICK": "Slick",
+  "tyre.INTER": "Inter",
+  "tyre.WET": "Wet",
+
+  "live.group_title": "සජීවී (F1 UDP)",
+  "live.sc_na": "SC/VSC: නොමැත",
+  "live.weather_na": "කාලගුණය: නොමැත",
+  "live.rain_na": "වැසි (ඊළඟ): නොමැත",
+  "live.rain_pit_na": "වැසි Pit: නොමැත",
+
+  "cards.group_title": "උපාය කාඩ්පත් (Prototype)",
+  "cards.tyres_prefix": "Tyres:",
+  "cards.next_pit_fmt": "ඊළඟ Pit: Lap {lap}"
+
+}
